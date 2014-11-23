@@ -121,8 +121,9 @@ void send_arp_reply(struct sr_instance* sr, sr_arp_hdr_t* arp_header,
     /* construct frame and send packet */
   
     /* send_packet(sr, (uint8_t*)arp_reply_header, sizeof(sr_arp_hdr_t), 
-        arp_header->ar_sip, ethertype_ip, 1); */
-      
+        arp_header->ar_sip, ethertype_arp, 1); 
+    */
+     
     sr_ethernet_hdr_t* ether_header =  (sr_ethernet_hdr_t*)packet;
 
     memcpy(ether_header->ether_dhost, ether_header->ether_shost, ETHER_ADDR_LEN);
@@ -137,7 +138,7 @@ void send_arp_reply(struct sr_instance* sr, sr_arp_hdr_t* arp_header,
     sr_send_packet(sr, packet, len, interface);
     
     free(arp_reply_header);
-
+    
     
     
 }
@@ -146,10 +147,12 @@ struct sr_rt* longest_prefix_match(struct sr_instance* sr, uint32_t ip_dst){
     struct sr_rt* cur = sr->routing_table;
     struct sr_rt* longest = NULL;
     unsigned long match_len = 0;
-    
+    struct in_addr addr;
+    addr.s_addr = ip_dst;
+
     while(cur != NULL) {
         if (((cur->dest.s_addr & cur->mask.s_addr) ==
-             (ip_dst & cur->mask.s_addr)) & (match_len <= cur->mask.s_addr)){
+             (addr.s_addr & cur->mask.s_addr)) & (match_len <= cur->mask.s_addr)){
             
             match_len = cur->mask.s_addr;
             longest = cur;
@@ -355,50 +358,35 @@ void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int packet_le
 
     struct sr_arpentry* arp_item = sr_arpcache_lookup(&sr->cache, rt_entry->gw.s_addr);
 
-    if (arp_item) {
+    if (arp_item || type == ethertype_arp) {
         struct sr_ethernet_hdr ether_header;
-            ether_header.ether_type = htons(type);
 
-        memcpy(ether_header.ether_dhost, arp_item->mac, ETHER_ADDR_LEN);
+        ether_header.ether_type = htons(type);
+
+        if (type == ethertype_arp && (((struct sr_arp_hdr *)packet)->ar_op == htons(arp_op_request))) {
+            memset(ether_header.ether_dhost, 255, ETHER_ADDR_LEN);
+        } else if(arp_item){
+            memcpy(ether_header.ether_dhost, arp_item->mac, ETHER_ADDR_LEN);
+        }
+
         memcpy(ether_header.ether_shost, iface->addr, ETHER_ADDR_LEN);
 
         uint8_t* ether_packet = malloc(packet_len + sizeof(struct sr_ethernet_hdr));
         memcpy(ether_packet, &ether_header, sizeof(struct sr_ethernet_hdr));
         memcpy(ether_packet + sizeof(struct sr_ethernet_hdr), packet, packet_len);
 
-        printf("********** send_packet - found arp_item - sending packet below\n");
         print_hdrs(ether_packet, packet_len + sizeof(struct sr_ethernet_hdr));
 
         sr_send_packet(sr, ether_packet, packet_len + sizeof(struct sr_ethernet_hdr), rt_entry->interface);
 
     } else {
-        if (type == ethertype_arp) {
-            struct sr_ethernet_hdr ether_header;
-            ether_header.ether_type = htons(type);
-
-            if (((sr_arp_hdr_t*)packet)->ar_op == htons(arp_op_request)) {
-                memset(ether_header.ether_dhost, 255, ETHER_ADDR_LEN);
-            }
-            memcpy(ether_header.ether_shost, iface->addr, ETHER_ADDR_LEN);
-
-            uint8_t* ether_packet = malloc(packet_len + sizeof(struct sr_ethernet_hdr));
-            memcpy(ether_packet, &ether_header, sizeof(struct sr_ethernet_hdr));
-            memcpy(ether_packet + sizeof(struct sr_ethernet_hdr), packet, packet_len);
-
-            printf("********** SENDING PACKET of arp type\n");
-            print_hdrs(ether_packet, packet_len + sizeof(struct sr_ethernet_hdr));
-
-            sr_send_packet(sr, ether_packet, packet_len + sizeof(struct sr_ethernet_hdr), rt_entry->interface);
-        } else {
-
-            printf("*********** NO ARP CACHE MISSED! \n");
-            uint8_t* ether_packet = malloc(packet_len);
-            memcpy(ether_packet, packet, packet_len);
-            struct sr_arpreq* arp_request = sr_arpcache_queuereq(&sr->cache, rt_entry->gw.s_addr,
-             ether_packet, packet_len, iface->name);
-            handle_arpreq(sr, arp_request);
-            /* free(ether_packet); */
-        }
+        printf("*********** NO ARP CACHE MISSED! \n");
+        uint8_t* ether_packet = malloc(packet_len);
+        memcpy(ether_packet, packet, packet_len);
+        struct sr_arpreq* arp_request = sr_arpcache_queuereq(&sr->cache, rt_entry->gw.s_addr,
+         ether_packet, packet_len, rt_entry->interface);
+        handle_arpreq(sr, arp_request);
+        /* free(ether_packet); */
     }
 
 }
@@ -484,10 +472,10 @@ void sr_handlepacket(struct sr_instance* sr,
             ip_packet->ip_sum = 0;
             ip_packet->ip_sum = cksum(ip_packet, ip_packet->ip_hl*4);
             
-            sr_ip_hdr_t* ip_packet_copy_to_fwd = (sr_ip_hdr_t*) malloc(len_packet);
+            uint8_t* ip_packet_copy_to_fwd = malloc(len_packet);
             memcpy(ip_packet_copy_to_fwd, ip_packet, len_packet);
-            send_packet(sr, (uint8_t*)ip_packet_copy_to_fwd, len_packet, ip_packet->ip_dst, ethertype_ip, 1);
-            /* forward_packet(sr, (uint8_t*) ip_packet_copy_to_fwd, len); */
+            send_packet(sr, ip_packet_copy_to_fwd, len_packet, ip_packet->ip_dst, ethertype_ip, 1);
+            /* ma(sr, (uint8_t*) ip_packet_copy_to_fwd, len); */
             /* free(ip_packet_copy_to_fwd); */
             
         }
@@ -512,12 +500,11 @@ void sr_handlepacket(struct sr_instance* sr,
             print_hdrs(packet, len);
             /* print_hdr_arp((uint8_t*)arp_header); */
             uint32_t ip = arp_header->ar_sip;
-            struct sr_arpcache cache = sr->cache;
             struct sr_arpentry *arp_item = sr_arpcache_lookup(&sr->cache, arp_header->ar_sip);
 
             if (arp_item == NULL) {
 
-                struct sr_arpreq* req = sr_arpcache_insert(&cache, arp_header->ar_sha, ip);
+                struct sr_arpreq* req = sr_arpcache_insert(&sr->cache, arp_header->ar_sha, ip);
             
                 if (req != NULL) {
                     /* send out all packets that were waiting on reply to this arp req*/
