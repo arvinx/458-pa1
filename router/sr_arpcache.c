@@ -24,67 +24,41 @@ void send_icmp_destination_host_unreachable(struct sr_instance* sr,
 
 void send_arp_request(struct sr_instance* sr, struct sr_arpreq* req) {
     /* send arp request, make arp header and ether header.*/
-    
-
-    printf(" ** SENDING ARP REQUEST \n");
     struct sr_if* interface_sr_if = sr_get_interface(sr, req->packets->iface);
-    sr_arp_hdr_t* arp_header =
-    (struct sr_arp_hdr*)malloc(sizeof(struct sr_arp_hdr));
+    sr_arp_hdr_t* arp_header = (struct sr_arp_hdr*)malloc(sizeof(struct sr_arp_hdr));
     
     arp_header->ar_hrd = htons(arp_hrd_ethernet);
     arp_header->ar_pro = htons(ethertype_ip);
-    arp_header->ar_hln = ETHER_ADDR_LEN;
-    arp_header->ar_pln = sizeof(uint32_t);
     arp_header->ar_op = htons(arp_op_request);
+
+    arp_header->ar_pln = sizeof(uint32_t);
+    arp_header->ar_hln = ETHER_ADDR_LEN;
+
     arp_header->ar_sip = interface_sr_if->ip;
     arp_header->ar_tip = req->ip;
     memcpy(arp_header->ar_sha, interface_sr_if->addr, ETHER_ADDR_LEN);
     
-    send_packet(sr, (uint8_t*)arp_header, sizeof(sr_arp_hdr_t), req->ip, ethertype_arp, 0);
-
-    /*
-    unsigned int len_packet = sizeof(struct sr_arp_hdr)
-    + sizeof(struct sr_ethernet_hdr);
-    
-    uint8_t* packet = (uint8_t*)malloc(len_packet);
-    
-    sr_ethernet_hdr_t* ether_header =
-    (sr_ethernet_hdr_t*)malloc(sizeof(struct sr_ethernet_hdr));
-    
-    ether_header->ether_type = htons(ethertype_arp);
-    memset(ether_header->ether_dhost, 255, ETHER_ADDR_LEN);
-    memcpy(ether_header->ether_shost, interface_sr_if->addr, ETHER_ADDR_LEN);
-    
-    
-    memcpy(packet, ether_header, sizeof(struct sr_ethernet_hdr));
-    memcpy(packet + sizeof(struct sr_ethernet_hdr), arp_header,
-           sizeof(struct sr_arp_hdr));
-    
-    print_hdrs(packet, len_packet);
-    sr_send_packet(sr, packet, len_packet, interface_sr_if->name);
-    */
-    /* free(arp_header); */
-    
+    send_packet(sr, (uint8_t*)arp_header, sizeof(sr_arp_hdr_t), req->ip, ethertype_arp, 0);    
 }
 
-void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req) {
+void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* request) {
     time_t curtime = time(NULL);
     
-    if (difftime(curtime,req->sent) > 1.0) {
-        if (req->times_sent >= 5) {
-            struct sr_packet* sr_pckt = req->packets;
+    if (difftime(curtime,request->sent) > 1.0) {
+        if (request->times_sent >= 5) {
+            
+            struct sr_packet* sr_pckt = request->packets;
             
             while (sr_pckt != NULL) {
-                make_and_send_icmp(sr, (sr_ip_hdr_t*)sr_pckt->buf, 3, 1, NULL);
+                make_and_send_icmp(sr, (sr_ip_hdr_t*)sr_pckt->buf, 3, 1);
                 sr_pckt = sr_pckt->next;
             }
-            sr_arpreq_destroy(&sr->cache, req);
-            
-            
+            sr_arpreq_destroy(&sr->cache, request);
+
         } else {
-            send_arp_request(sr, req);
-            req->sent = curtime;
-            req->times_sent = req->times_sent + 1;
+            send_arp_request(sr, request);
+            request->sent = time(NULL);
+            request->times_sent = request->times_sent + 1;
         }
         
     }
