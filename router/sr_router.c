@@ -149,23 +149,22 @@ void make_and_send_icmp_echo(struct sr_instance* sr, sr_ip_hdr_t* ip_packet) {
 /* helper method to construct icmp requests that are not echo */
 void make_and_send_icmp(struct sr_instance* sr, sr_ip_hdr_t* ip_packet, int icmp_type, int icmp_code) {
 
-    struct sr_icmp_t3_hdr* icmp_header = 
-    (struct sr_icmp_t3_hdr*) malloc(sizeof(struct sr_icmp_t3_hdr)); 
-
+    struct sr_icmp_t3_hdr icmp_header;
     struct sr_ip_hdr* ip_header = 
     (struct sr_ip_hdr*) malloc(sizeof(struct sr_ip_hdr));
 
-    icmp_header->icmp_type = icmp_type;
-    icmp_header->icmp_code = icmp_code;
-    icmp_header->unused = 0;
-    memcpy(icmp_header->data, ip_packet, ICMP_DATA_SIZE);
+    icmp_header.icmp_type = icmp_type;
+    icmp_header.icmp_code = icmp_code;
+    icmp_header.unused = 0;
+    memcpy(icmp_header.data, ip_packet, ICMP_DATA_SIZE);
 
     ip_header->ip_dst = ip_packet->ip_src;
     ip_header->ip_id = ip_packet->ip_id;
+    ip_header->ip_v = 4;
     ip_header->ip_p = ip_protocol_icmp;
     ip_header->ip_tos = 0;
     ip_header->ip_off = htons(IP_DF);
-    ip_header->ip_ttl = 100;
+    ip_header->ip_ttl = 50;
 
     struct sr_rt* rt_entry = longest_prefix_match(sr, ip_header->ip_dst);
     if (rt_entry == NULL) {
@@ -180,19 +179,19 @@ void make_and_send_icmp(struct sr_instance* sr, sr_ip_hdr_t* ip_packet, int icmp
     ip_header->ip_sum = 0;
     ip_header->ip_sum = cksum(ip_header, 4*ip_header->ip_hl);
 
-    icmp_header->icmp_sum = 0;
-    icmp_header->icmp_sum = cksum(icmp_header, sizeof(sr_icmp_t3_hdr_t));
+    icmp_header.icmp_sum = 0;
+    icmp_header.icmp_sum = cksum(&icmp_header, sizeof(struct sr_icmp_t3_hdr));
 
     uint8_t* packet_to_send = malloc(len);
     memcpy(packet_to_send, ip_header, 4*ip_header->ip_hl);
-    memcpy(packet_to_send + 4*ip_header->ip_hl, icmp_header, sizeof(sr_icmp_t3_hdr_t));
+    memcpy(packet_to_send + 4*ip_header->ip_hl, &icmp_header, len - 4*ip_header->ip_hl);
 
-    send_packet(sr, packet_to_send, len, ip_packet->ip_src, ethertype_ip, 0);
+    send_packet(sr, packet_to_send, len, ip_packet->ip_src, ethertype_ip, 2);
 }
 
 /* wrapper to send ip packets and arp packets. wraps them in ether frame*/
-void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int packet_len, uint32_t target, enum sr_ethertype type, int rt_icmp_not_found) {
-
+void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int packet_len,
+    uint32_t target, enum sr_ethertype type, int rt_icmp_not_found) {
 
     struct sr_rt* rt_entry = longest_prefix_match(sr, target);
 
@@ -217,8 +216,8 @@ void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int packet_le
         memcpy(ether_packet, &ether_header, sizeof(struct sr_ethernet_hdr));
         memcpy(ether_packet + sizeof(struct sr_ethernet_hdr), packet, packet_len);
 
-        print_hdrs(ether_packet, packet_len + sizeof(struct sr_ethernet_hdr));
         sr_send_packet(sr, ether_packet, packet_len + sizeof(struct sr_ethernet_hdr), rt_entry->interface);
+        
         free(ether_packet);
 
     } else if(type == ethertype_arp && (((struct sr_arp_hdr *)packet)->ar_op == htons(arp_op_request))) {
@@ -233,8 +232,8 @@ void send_packet(struct sr_instance* sr, uint8_t* packet, unsigned int packet_le
         memcpy(ether_packet, &ether_header, sizeof(struct sr_ethernet_hdr));
         memcpy(ether_packet + sizeof(struct sr_ethernet_hdr), packet, packet_len);
 
-        print_hdrs(ether_packet, packet_len + sizeof(struct sr_ethernet_hdr));
         sr_send_packet(sr, ether_packet, packet_len + sizeof(struct sr_ethernet_hdr), rt_entry->interface);
+
         free(ether_packet);
 
     } else {
